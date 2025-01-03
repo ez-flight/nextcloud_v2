@@ -1,0 +1,133 @@
+version: '3'
+
+volumes:
+  nextcloud-data:
+
+services:
+######## DATABASE SERVICE ########
+  nextcloud-db:
+    image: postgres:14.1-alpine
+    container_name: postgres-nextcloud
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-""}
+      - POSTGRES_USER=${POSTGRES_USER:-""}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-""}
+    volumes:
+#     - nextcloud-db:/var/lib/postgresql/data
+     - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - database
+
+######## WEB SERVICE ########
+  nextcloud_app:
+    image: nextcloud
+    container_name: nextcloud-app
+    links:
+      - nextcloud-db
+    volumes:
+#      - ./nextcloud:/var/www/html
+      - ./apps:/var/www/html/custom_apps
+      - ./data:/var/www/html/data
+      - ./config:/var/www/html/config
+      - nextcloud-data:/var/www/html
+    environment:
+      - NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_ADMIN_USER:-""}
+      - NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_ADMIN_PASSWORD:-""}
+      # - NEXTCLOUD_TABLE_PREFIX=${NEXTCLOUD_TABLE_PREFIX:-""}
+      - POSTGRES_HOST=${POSTGRES_HOST:-""}
+      - POSTGRES_DB=${POSTGRES_DB:-""}
+      - POSTGRES_USER=${POSTGRES_USER:-""}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-""}
+      - NEXTCLOUD_TRUSTED_DOMAINS=${NEXTCLOUD_TRUSTED_DOMAINS:-""}
+#    ports:
+#      - 8081:80
+    depends_on:
+      - nextcloud-db
+#      - onlyoffice
+    restart: always
+    hostname: nextcloud
+    networks:
+      - database
+      - frontend
+
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=frontend
+
+      - traefik.http.routers.nextcloud.middlewares=nextcloud,nextcloud_redirect
+      - traefik.http.routers.nextcloud.tls.certresolver=myresolver
+      - traefik.http.routers.nextcloud.rule=Host(`${NEXTCLOUD_DOMAIN}`)
+
+      - traefik.http.middlewares.nextcloud.headers.customFrameOptionsValue=ALLOW-FROM https://${DOMAIN}
+      - traefik.http.middlewares.nextcloud.headers.contentSecurityPolicy=frame-ancestors 'self' ${DOMAIN} *.${DOMAIN}
+
+      - traefik.http.middlewares.nextcloud.headers.stsSeconds=155520011
+      - traefik.http.middlewares.nextcloud.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.nextcloud.headers.stsPreload=true
+      - traefik.http.middlewares.nextcloud.headers.accesscontrolalloworigin=*
+      - traefik.http.middlewares.nextcloud.headers.customresponseheaders.X-Frame-Options=SAMEORIGIN
+
+      - traefik.http.middlewares.nextcloud_redirect.redirectregex.regex=/.well-known/(card|cal)dav
+      - traefik.http.middlewares.nextcloud_redirect.redirectregex.replacement=/remote.php/dav/
+
+    deploy:
+      resources:
+          limits:
+            cpus: "4"
+            memory: 1024M
+
+
+######## ONLYOFICCE ########
+  onlyoffice:
+    container_name: onlyoffice
+    restart: always
+    hostname: onlyoffice
+    depends_on:
+      - nextcloud_app
+    image: onlyoffice/documentserver
+    networks:
+      - frontend
+    environment:
+      # Раскомментируйте приведенные ниже строки, чтобы включить проверку веб-токена JSON..
+      - JWT_ENABLED=${JWT_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-""}
+      - JWT_HEADER=${JWT_HEADER:-""}
+      - JWT_IN_BODY=${JWT_IN_BODY:-""}
+    volumes:
+      - ./nginx.error.log:/var/log/onlyoffice/documentserver/nginx.error.log
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=frontend
+
+      - traefik.http.routers.onlyoffice.middlewares=onlyoffice
+      - traefik.http.routers.onlyoffice.tls.certresolver=myresolver
+      - traefik.http.routers.onlyoffice.rule=Host(`${ONLYOFFICE_DOMAIN}`)
+#      - traefik.http.routers.onlyoffice.loadbalancer.server.port=80"
+
+      - traefik.http.middlewares.onlyoffice.headers.customFrameOptionsValue=ALLOW-FROM https://${DOMAIN}
+      - traefik.http.middlewares.onlyoffice.headers.contentSecurityPolicy=frame-ancestors 'self' ${DOMAIN} *.${DOMAIN}
+      - traefik.http.middlewares.onlyoffice.headers.stsSeconds=155520011
+      - traefik.http.middlewares.onlyoffice.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.onlyoffice.headers.stsPreload=true
+
+      ## Extra headers for onlyoffice
+      - traefik.http.routers.onlyoffice.tls=true
+      - traefik.http.middlewares.cors-headers.headers.accessControlAllowOrigin=*
+      - traefik.http.middlewares.onlyoffice.headers.customRequestHeaders.X-Forwarded-Proto=https
+      - traefik.http.middlewares.onlyoffice.headers.accesscontrolalloworigin=*
+
+    deploy:
+      resources:
+          limits:
+            cpus: "3"
+            memory: 2048M
+
+networks:
+  frontend:
+    external:
+      name: frontend
+  database:
+    external:
+      name: database
+
